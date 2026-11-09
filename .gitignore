@@ -1,0 +1,24 @@
+# Python
+__pycache__/
+*.pyc
+
+# 回归测试输出
+reproduce_*.log
+out/
+*.mcif
+
+# DFT 输入输出（--write-vasp 产物）
+POSCAR
+INCAR
+KPOINTS
+POTCAR
+job.sh
+CHG*
+CHGCAR
+OUTCAR
+OSZICAR
+vasprun.xml
+WAVECAR
+
+# 系统文件
+.DS_Store
