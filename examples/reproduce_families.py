@@ -43,20 +43,17 @@ def framework_match(a, b, symprec=1e-2, lat_tol=0.25):
 
 
 def wave_gate(struct, mag_el, want_wave, tag):
-    """在磁元素轨道上枚举染色并 fsg 判定；返回 (通过的pattern, idxs, signs) 或 None"""
-    orbits = core.find_orbits(struct)
+    """在磁元素轨道上联合枚举染色并 fsg 判定；返回 (pattern, idxs, signs) 或 None。
+
+    使用 core.joint_colorings，因此磁元素占据多个轨道/同一字母复用时也能联合处理，
+    不会冻结其余磁轨道。
+    """
     hits = []
-    for wk, idxs in sorted(orbits.items()):
-        if str(struct[idxs[0]].specie.symbol) != mag_el:
-            continue
-        if len(idxs) % 2:
-            continue
-        coords = [struct[i].frac_coords for i in idxs]
-        for pat in core.orbit_colorings(coords, struct.lattice):
-            signs = [1 if c == "+" else -1 for c in pat]
-            r = classify.fsg_classify(struct, idxs, signs)
-            if r["texture"] == want_wave:
-                hits.append((f"{mag_el}({wk})^{len(idxs)}:{pat}", idxs, signs))
+    for desc, odd_note, idxs, signs in core.joint_colorings(
+            struct, {mag_el}):
+        r = classify.fsg_classify(struct, idxs, signs)
+        if r["texture"] == want_wave and r["is_altermagnet"]:
+            hits.append((desc, idxs, signs))
     if hits:
         for desc, _, _ in hits:
             print(f"  [{tag}] {want_wave} 命中: {desc}")
@@ -70,7 +67,8 @@ def run_family(name, rc, write=None):
     print(f"{name}: SG{rc['sg']} 配方 {rc['recipe']}  目标 {rc['target_wave']}")
 
     # 1. 群分解生成
-    raw = wyckoff.generate_ok(rc["sg"], rc["recipe"], min_d=1.5)
+    raw = wyckoff.generate_ok(rc["sg"], rc["recipe"], min_d=1.5,
+                              return_best=True)
     if raw is None:
         print("  生成失败 (pyxtal 全部种子碰撞)")
         return False

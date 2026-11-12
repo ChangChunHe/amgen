@@ -69,6 +69,71 @@ SG(40) → 轨道组合(~10²–10³) → 前染色 fsg 门 → 装饰过滤
   → CHGNet 50 步 → 对称化 → 复判 fsg 门 → DFT(~10²)
 ```
 
+## 自动 M/非磁角色枚举
+
+`recipes.py` 中的配方显式指定了磁轨道；当事先不知道哪个轨道应为磁性时，
+`roles` 模块补上这一层：
+
+- `roles.find_orbit_instances()` 按独立轨道实例识别，重复的 Wyckoff 字母
+  不会被合并；
+- `roles.role_assignments()` 枚举偶数重轨道实例的 `M`/非磁子集；
+- `roles.joint_role_colorings()` 在所有选中的 M 轨道上联合枚举等量 `+/-`
+  涂色，并按结构对称性去重；
+- `roles.scan_roles()` 调用 fsg，只返回目标波形的命中。
+
+对已有框架直接扫描：
+
+```bash
+python examples/enumerate_roles.py POSCAR --target-wave i-wave
+```
+
+也可以先生成抽象框架（重复字母表示独立轨道实例）：
+
+```bash
+python examples/enumerate_roles.py --sg 180 --orbits f f j --target-wave i-wave
+```
+
+对真实装饰结构，可把候选 M 轨道限制在化学上合理的元素，并在弛豫结构上
+放宽对称性识别容差：
+
+```bash
+python examples/enumerate_roles.py POSCAR --target-wave i-wave \
+  --candidate-elements Fe Cr Mn --symprec 0.01
+```
+
+扫描回答的是“哪个轨道角色分配能让该几何框架支持目标自旋纹理”，
+不是“哪些原子在真实材料中一定有磁矩”。不指定 `--candidate-elements`
+时所有重数不超过 12 的偶数重轨道都会被测试，因此 O/B/Mg 等轨道也可能
+给出对称性成立但化学上不合理的命中。元素装饰后仍需 fsg 复判，并用 DFT 竞争磁构型
+确认磁基态。`max_role_assignments`、`max_colorings` 是硬上限；
+`max_hits` 达到上限后停止（截断）。`scan_roles` 默认只保留
+`is_altermagnet=True` 的命中，并可在跑 fsg 前用 `resymmetrize_sg`
+对称化回目标母群。
+
+## 端到端候选枚举
+
+`enumerate_candidates` 把整条链路串起来：
+SG → Wyckoff 轨道组合 → 抽象框架 → 自动角色扫描 → 化学装饰 → 过滤。
+
+```bash
+python examples/enumerate_candidates.py --sg 180 --max-atoms 18 \
+  --magnetic-elements Mn Fe Cr --nonmagnetic-elements Mg Al Si P S \
+  --max-frameworks 200 --max-candidates 20
+```
+
+```python
+from amgen import enumerate as am_enum
+for cand in am_enum.enumerate_candidates(
+        sgs=[180, 182], target_wave="i-wave",
+        magnetic_elements=["Mn", "Fe", "Cr"],
+        nonmagnetic_elements=["Mg", "Al", "Si", "P", "S"],
+        min_cn=4, charge_neutral=True):
+    print(cand.sg, cand.composition, cand.magnetic_element, cand.pattern)
+```
+
+`nonmagnetic_elements=None` 时保留占位元素（只做对称候选）。元素装饰按
+轨道实例进行，重复的 Wyckoff 字母会分别替换。
+
 ## 依赖
 
 - pymatgen, spglib, pyxtal, chgnet, numpy
@@ -105,11 +170,15 @@ Cs₃Cr₂Br₉ 走原型框架匹配，晶格差 ~20% 由后续 DFT 弛豫吸�
 ## API 速览
 
 ```python
-from amgen import wyckoff, relax, core, classify, decorate, export
+from amgen import wyckoff, relax, core, classify, decorate, export, roles
 
 wyckoff.wyckoff_table(182)                     # SG -> Wyckoff 表
 wyckoff.orbit_combos(182, max_atoms=30)        # 轨道组合枚举(字母可复用)
 s = wyckoff.generate_ok(182, {"Ba":["b"],"Fe":["f"],"O":["g","c"]})
+
+# 未知磁轨道：枚举 M/非磁角色，再枚举自旋涂色
+for hit in roles.scan_roles(s, "i-wave", candidate_elements=["Fe"]):
+    print(hit.magnetic_orbits, hit.pattern, hit.wave)
 
 s2, sg2 = relax.relax_and_symmetrize(s, target_sg=182)   # CHGNet + 回母群
 

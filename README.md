@@ -83,6 +83,76 @@ SG(40) → orbit combos(~10²–10³) → pre-coloring fsg gate → decoration f
   → CHGNet 50 steps → re-symmetrize → re-judgment fsg gate → DFT(~10²)
 ```
 
+## Automatic M / nonmagnetic role enumeration
+
+The recipes in `recipes.py` explicitly declare which orbit is magnetic. When
+that is unknown, `roles` removes the assumption:
+
+- `roles.find_orbit_instances()` keeps repeated Wyckoff letters as separate
+  orbit instances (unlike letter-only grouping);
+- `roles.role_assignments()` enumerates even-multiplicity orbit subsets as
+  candidate magnetic `M` roles;
+- `roles.joint_role_colorings()` enumerates balanced `+/-` colorings on every
+  selected orbit and removes duplicates under the structure's symmetry;
+- `roles.scan_roles()` calls fsg and returns only the requested wave type.
+
+On a known framework:
+
+```bash
+python examples/enumerate_roles.py POSCAR --target-wave i-wave
+```
+
+Or generate an abstract framework first (repeated letters means separate
+orbit instances):
+
+```bash
+python examples/enumerate_roles.py --sg 180 --orbits f f j --target-wave i-wave
+```
+
+On a real decorated structure, restrict candidate magnetic orbits to the
+chemically plausible elements and relax the symmetry tolerance when needed:
+
+```bash
+python examples/enumerate_roles.py POSCAR --target-wave i-wave \
+  --candidate-elements Fe Cr Mn --symprec 0.01
+```
+
+The scan answers "for which orbit assignment does this geometry admit the
+target spin texture?", not "which atoms are actually magnetic". Without
+`--candidate-elements` every even orbit up to multiplicity 12 is tested, so
+O/B/Mg orbits can produce symmetry-valid but chemically implausible hits. Element decoration,
+post-relaxation fsg re-judgment, and DFT magnetic-ground-state competition are
+still required. `max_role_assignments` and `max_colorings` are hard guards;
+`max_hits` stops after the requested number (truncation). `scan_roles` by
+default keeps only `is_altermagnet=True` hits and can symmetrize the framework
+back to a target SG (`resymmetrize_sg`) before running fsg.
+
+## End-to-end candidate enumeration
+
+`enumerate_candidates` wires the whole loop together:
+SG → Wyckoff orbit combinations → abstract framework → automatic role scan →
+chemical decoration → filters.
+
+```bash
+python examples/enumerate_candidates.py --sg 180 --max-atoms 18 \
+  --magnetic-elements Mn Fe Cr --nonmagnetic-elements Mg Al Si P S \
+  --max-frameworks 200 --max-candidates 20
+```
+
+```python
+from amgen import enumerate as am_enum
+for cand in am_enum.enumerate_candidates(
+        sgs=[180, 182], target_wave="i-wave",
+        magnetic_elements=["Mn", "Fe", "Cr"],
+        nonmagnetic_elements=["Mg", "Al", "Si", "P", "S"],
+        min_cn=4, charge_neutral=True):
+    print(cand.sg, cand.composition, cand.magnetic_element, cand.pattern)
+```
+
+`nonmagnetic_elements=None` keeps the placeholder species (symmetry-only
+candidates). Element decoration is orbit-instance aware: repeated Wyckoff
+letters are replaced independently.
+
 ## Dependencies
 
 - pymatgen, spglib, pyxtal, chgnet, numpy
@@ -122,11 +192,15 @@ relaxation absorbs).
 ## API quick tour
 
 ```python
-from amgen import wyckoff, relax, core, classify, decorate, export
+from amgen import wyckoff, relax, core, classify, decorate, export, roles
 
 wyckoff.wyckoff_table(182)                     # SG -> Wyckoff table
 wyckoff.orbit_combos(182, max_atoms=30)        # orbit-combination enumeration
 s = wyckoff.generate_ok(182, {"Ba": ["b"], "Fe": ["f"], "O": ["g", "c"]})
+
+# unknown magnetic orbit: enumerate M/nonmagnetic roles, then colorings
+for hit in roles.scan_roles(s, "i-wave", candidate_elements=["Fe"]):
+    print(hit.magnetic_orbits, hit.pattern, hit.wave)
 
 s2, sg2 = relax.relax_and_symmetrize(s, target_sg=182)   # CHGNet + back to parent SG
 
@@ -155,9 +229,11 @@ export.write_vasp("out/X/i", s3, magmom_list)
 
 ```
 amgen/
-  amgen/{wyckoff,relax,core,classify,decorate,export,recipes}.py
-  examples/reproduce_families.py    # four-family regression test
-  job_reproduce.sh                  # cluster submission (parallel)
+  amgen/{wyckoff,relax,core,classify,decorate,export,recipes,roles,enumerate}.py
+  examples/reproduce_families.py     # four-family regression test
+  examples/enumerate_roles.py        # automatic M/nonmagnetic role scan
+  examples/enumerate_candidates.py   # end-to-end candidate enumeration
+  job_reproduce.sh                   # cluster submission (parallel)
 ```
 
 Full campaign logs and negative-result analyses (in Chinese):

@@ -54,25 +54,34 @@ def prescale_volume(struct, packing=0.65):
     return struct
 
 
-def generate_ok(sg, recipe, seeds=range(20), min_d=1.6):
-    """带距离检查的种子重试 + 体积预标定: 返回 (结构 or None)"""
-    last = None
+def generate_ok(sg, recipe, seeds=range(20), min_d=1.6, return_best=False):
+    """带距离检查的种子重试 + 体积预标定。
+
+    满足 min_d 即返回；全部种子都不满足时返回 None，除非 return_best=True
+    （此时返回最小间距最大的那个结构）。
+    """
+    best = None
+    best_d = None
     for seed in seeds:
         try:
             s = generate(sg, recipe, seed=seed)
             prescale_volume(s)
-            last = s
-            if min_distance(s) >= min_d:
+            d = min_distance(s)
+            if best is None or d > best_d:
+                best, best_d = s, d
+            if d >= min_d:
                 return s
         except Exception:
             continue
-    return last
+    return best if return_best else None
 
 
-def orbit_combos(sg, max_atoms=30, need_even_orbit=True, max_orbits=6):
+def orbit_combos(sg, max_atoms=30, need_even_orbit=True, max_orbits=6,
+                 min_even_multiplicity=2):
     """枚举 SG 下的 Wyckoff 轨道组合（字母可重复，总重数 <= max_atoms）。
 
-    返回 [((letter, mult), ...), ...]，要求至少含一个偶数重轨道（磁染色用）。
+    返回 [((letter, mult), ...), ...]，need_even_orbit=True 时要求至少含一个
+    偶数重轨道（与 roles.role_assignments 的候选资格保持一致；2 重也计入）。
     组合按总原子数升序产出，供装饰/染色漏斗使用。
     """
     table = [(L, m) for L, m, _ in wyckoff_table(sg)]
@@ -82,7 +91,8 @@ def orbit_combos(sg, max_atoms=30, need_even_orbit=True, max_orbits=6):
             n = sum(m for _, m in combo)
             if n > max_atoms:
                 continue
-            if need_even_orbit and not any(m % 2 == 0 and m >= 4 for _, m in combo):
+            if need_even_orbit and not any(
+                    m % 2 == 0 and m >= min_even_multiplicity for _, m in combo):
                 continue
             combos.append(combo)
     return sorted(combos, key=lambda c: sum(m for _, m in c))

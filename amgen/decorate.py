@@ -1,5 +1,6 @@
 """amgen.decorate — 化学装饰：轨道级元素替换 + 价态/配位过滤 + 晶格标定"""
 from collections import deque
+from itertools import product
 import numpy as np
 
 MAG_SET_3D = ["V", "Cr", "Mn", "Fe", "Co", "Ni"]
@@ -42,7 +43,11 @@ ANIONS = {"O", "S", "Se", "Te", "F", "Cl", "Br", "I", "N", "P", "As", "Sb"}
 
 
 def substitute_orbits(struct, orbit_map):
-    """按 {wyckoff_letter: 新元素} 逐轨道替换（整轨道所有位点同元素）"""
+    """按 {wyckoff_letter: 新元素} 逐轨道替换（整轨道所有位点同元素）。
+
+    旧接口按字母合并；同一字母被多个独立轨道复用时会把它们一起替换。
+    需要实例级替换请用 substitute_orbit_instances。
+    """
     from .core import find_orbits
     s = struct.copy()
     orbits = find_orbits(struct)
@@ -50,6 +55,83 @@ def substitute_orbits(struct, orbit_map):
         for i in orbits[wk]:
             s.replace(i, el)
     return s
+
+
+def substitute_orbit_instances(struct, orbit_map):
+    """按 {orbit_id: 新元素} 逐轨道实例替换。
+
+    orbit_id 是 core.find_orbit_instances(struct) 返回列表中的序号；
+    同一 Wyckoff 字母的复用实例可分别替换。
+    """
+    from .core import find_orbit_instances
+    s = struct.copy()
+    instances = find_orbit_instances(struct)
+    for i, o in enumerate(instances):
+        if i not in orbit_map:
+            continue
+        for idx in o["indices"]:
+            s.replace(idx, orbit_map[i])
+    return s
+
+
+def iter_nonmagnetic_assignments(n_slots, pool, max_combos=100):
+    """非磁轨道上的元素分配枚举：pool^n_slots 的笛卡尔积。"""
+    if n_slots == 0:
+        yield ()
+        return
+    total = len(pool) ** n_slots
+    if total > max_combos:
+        raise RuntimeError(
+            f"非磁元素组合数 {total} 超过 max_combos={max_combos}；"
+            "请缩小 pool 或分轨道指定元素。")
+    yield from product(pool, repeat=n_slots)
+
+
+def decorate_assignment(struct, assignment, magnetic_element,
+                        nonmagnetic_map=None, rescale=True):
+    """按角色分配装饰元素。
+
+    assignment 为 bool 序列（True=M 轨道）；magnetic_element 填充全部 M 轨道；
+    nonmagnetic_map 为 {orbit_id: element}，未提供的非磁轨道保留原元素。
+    rescale=True 时按新成分重新用共价半径预标定晶格体积。
+    """
+    from .core import find_orbit_instances
+    mapping = {}
+    for i, is_mag in enumerate(assignment):
+        if is_mag:
+            mapping[i] = magnetic_element
+        elif nonmagnetic_map and i in nonmagnetic_map:
+            mapping[i] = nonmagnetic_map[i]
+    s = substitute_orbit_instances(struct, mapping)
+    if rescale:
+        from .wyckoff import prescale_volume
+        prescale_volume(s)
+    return s
+
+
+def decorated_ok(struct, mag_indices, magnetic_element, *, min_cn=None,
+                 charge_neutral=False, max_magnetic_fraction=None,
+                 exclude_same_element=False):
+    """装饰结构的化学过滤：价态中性 / 磁位配位数 / 磁原子占比。
+
+    返回 True/False。charge_neutral=True 时用形式氧化态代数和为零过滤
+    （金属间化合物应关闭）；max_magnetic_fraction 为 n_mag / n_nonmag 上限。
+    """
+    if charge_neutral:
+        need = valence_charge_need(struct, mag_indices, len(mag_indices))
+        if os_ok(magnetic_element, need) is None:
+            return False
+    if min_cn is not None:
+        for idx in mag_indices:
+            cn = cn_of(struct, idx,
+                       exclude_el=magnetic_element if exclude_same_element else None)
+            if cn < min_cn:
+                return False
+    if max_magnetic_fraction is not None:
+        n_nonmag = len(struct) - len(mag_indices)
+        if n_nonmag == 0 or len(mag_indices) / n_nonmag > max_magnetic_fraction:
+            return False
+    return True
 
 
 def cn_of(struct, idx, exclude_el=None, rcut=3.2):
